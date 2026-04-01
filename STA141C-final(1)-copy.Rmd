@@ -1,0 +1,397 @@
+---
+title: "STA141C"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-05-07"
+---
+
+#Read the data
+```{r}
+Crash <- read.csv("/Users/ningzhu/Downloads/Crash_Reporting_-_Drivers_Data.csv")
+```
+
+#Cleaning data part
+```{r}
+Crash <- subset(Crash, Vehicle.Year %in% 1900:2024)
+Crash$Crash.Date.Time <- as.POSIXct(Crash$Crash.Date.Time, format = "%m/%d/%Y %I:%M:%S %p")
+# Extract year from Crash.Date.Time and assign it to Crash_year
+Crash$Crash_year <- as.numeric(format(Crash$Crash.Date.Time, "%Y"))
+Crash$Vehicle.Year <- as.numeric(Crash$Vehicle.Year)
+Crash$Used.year <- Crash$Crash_year - Crash$Vehicle.Year
+Crash
+```
+
+
+
+
+
+
+```{r}
+#There are 1415 in "SUSPECTED SERIOUS INJURY"
+#There are 11870 in "SUSPECTED MINOR INJURY"
+#There are 153 in "FATAL INJURY"
+Crash$Injury.Category <- ifelse(Crash$Injury.Severity == "SUSPECTED SERIOUS INJURY" | 
+                                Crash$Injury.Severity == "FATAL INJURY", 1,
+                                ifelse(Crash$Injury.Severity == "SUSPECTED MINOR INJURY", 0, NA))
+Data <- Crash[Crash$Injury.Severity == "SUSPECTED SERIOUS INJURY" |
+              Crash$Injury.Severity == "SUSPECTED MINOR INJURY" |
+              Crash$Injury.Severity == "FATAL INJURY", ]
+new_Data <- Data[, c("Used.year","Driver.At.Fault", "Speed.Limit", "Injury.Category")]
+new_Data <- subset(new_Data, Driver.At.Fault != "Unknown")
+new_Data$Driver.At.Fault[new_Data$Driver.At.Fault == "Yes"] <- 1
+new_Data$Driver.At.Fault[new_Data$Driver.At.Fault == "No"] <- 0
+new_Data
+```
+
+```{r}
+negative_values <- new_Data$Used.year < 0
+new_Data[negative_values, ]
+```
+
+```{r}
+library(dplyr)
+
+# Assuming your dataset is named new_Data
+new_Data <- new_Data %>%
+  filter(Used.year >= 0)
+new_Data
+```
+
+
+
+
+
+#Virtualization_part
+```{r}
+library(dplyr)
+library(ggplot2)
+
+totals_by_category <- new_Data %>%
+  group_by(Injury.Category) %>%
+  summarise(Total = n(), .groups = 'drop')
+
+speed_injury_data <- new_Data %>%
+  group_by(Speed.Limit, Injury.Category) %>%
+  summarise(Count = n(), .groups = 'drop') %>%
+  left_join(totals_by_category, by = "Injury.Category") %>%
+  mutate(Percentage = (Count / Total) * 100) 
+
+ggplot(speed_injury_data, aes(x = as.factor(Speed.Limit), y = Percentage, fill = Injury.Category)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(palette = "Set1") + 
+  ggtitle("Percentage of Incidents by Speed Limit and Injury Category") +
+  xlab("Speed Limit (mph)") +
+  ylab("Percentage of Incidents") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  # Rotate x-axis labels for better readability
+
+```
+
+
+```{r}
+# Create mosaic plot
+library(ggplot2)
+mosaicplot(table(new_Data$Injury.Category, new_Data$Driver.At.Fault),
+           main = "Mosaic Plot of Injury Category vs. Driver.At.Fault",
+           color = c("lightblue", "pink"),
+           xlab = "Injury Category",
+           ylab = "Driver's Fault")
+
+
+```
+
+
+
+```{r}
+library(ggplot2)
+
+# Ensure that Injury.Category is a factor with meaningful level names
+new_Data$Injury.Category <- factor(new_Data$Injury.Category, levels = c(0, 1),
+                                   labels = c("Minor Injury", "Serious/Fatal Injury"))
+
+# Create the boxplot
+ggplot(new_Data, aes(x = Injury.Category, y = Used.year, fill = Injury.Category)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Set1", labels = c("Minor Injury", "Serious/Fatal Injury")) +
+  ggtitle("Used Years by Injury Category") +
+  xlab("Injury Category") +
+  ylab("Used Year") +
+  theme_minimal()  # Using a minimal theme for a cleaner look
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Calculate the IQR and define bounds for outliers within each injury category
+cleaned_Data <- new_Data %>%
+  group_by(Injury.Category) %>%
+  filter(between(Used.year, quantile(Used.year, 0.25) - 1.5 * IQR(Used.year), quantile(Used.year, 0.75) + 1.5 * IQR(Used.year))) %>%
+  ungroup()
+
+
+# Create the boxplot with the cleaned data
+ggplot(cleaned_Data, aes(x = Injury.Category, y = Used.year, fill = Injury.Category)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Set1") +
+  ggtitle("Used year by Injury Category (Outliers Removed)") +
+  xlab("Injury Category") +
+  ylab("Used year") +
+  theme_minimal()  # Using a minimal theme for a cleaner look
+
+
+```
+
+# Model_Part
+# Cross Validation: We separate the data to training and test.
+# Logistic model
+```{r}
+set.seed(1)
+train_indices <- sample(1:nrow(new_Data), nrow(new_Data) / 2)
+train_data <- new_Data[train_indices,]
+test_data <- new_Data[-train_indices,]
+```
+
+
+
+```{r}
+#Find P-value
+glm.fit <- glm(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, data = train_data, family = binomial)
+summary(glm.fit)
+```
+
+
+# Predict of glm
+
+```{r}
+# Assuming train_data is available and properly formatted
+# Load necessary library
+library(boot)
+
+# Fit the logistic regression model
+glm.fit <- glm(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, 
+               data = train_data, 
+               family = binomial)
+
+# Define a function to perform cross-validation
+# The function needs to be defined to work with the cv.glm() function
+cv.glm.fun <- function(data, indices) {
+  # Train the model on a subset of data defined by indices
+  fit <- glm(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit,
+             data = data[indices, ], family = binomial)
+  
+  # Return the fitted model
+  return(fit)
+}
+
+# Perform 10-fold cross-validation
+set.seed(123)  # For reproducibility
+cv.result <- cv.glm(train_data, glm.fit, K = 10, cost = function(r, pi = 0) mean(abs(r-pi) > 0.5))
+
+# Print the results
+# This will show the cross-validated estimate of the prediction error
+print(cv.result$delta[1])  # The first element is typically the raw cross-validation estimate
+
+```
+
+
+
+```{r}
+library(MASS)
+library(caret)
+
+set.seed(1234)
+
+K <- 10  # Example: 50-fold cross-validation
+error_rates <- numeric(K)
+accuracies <- numeric(K)
+
+for (fold in 1:K) {
+  fold_indices <- sample(1:nrow(new_Data))
+  fold_size <- floor(nrow(new_Data) / K)
+  validation_indices <- fold_indices[((fold - 1) * fold_size + 1):(fold * fold_size)]
+  train_indices <- fold_indices[setdiff(1:nrow(new_Data), validation_indices)]
+  train_data <- new_Data[train_indices, ]
+  test_data <- new_Data[validation_indices, ]
+  glm.fit <- glm(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit,
+                 data = train_data,
+                 family = binomial)
+  
+  y_pred_probs <- predict(glm.fit, newdata = test_data, type = "response")
+  y_pred <- ifelse(y_pred_probs > 0.5, 1, 0)
+  error_rates[fold] <- mean(y_pred != test_data$Injury.Category)
+}
+
+avg_error_rate <- mean(error_rates)
+avg_error_rate
+cm <- confusionMatrix(as.factor(y_pred), as.factor(test_data$Injury.Category))
+accuracies <- cm$overall['Accuracy']
+cm
+accuracies
+```
+
+
+```{r}
+library(MASS)
+n <- nrow(new_Data)
+res <- 0
+for (k in 1:50) {
+  glm.fit <- glm(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit,
+            data = train_data,
+            family = binomial)
+  y_pred <- predict(glm.fit, test_data)
+  predicted_labels <- ifelse(y_pred > 0, 1, 0)
+  res <- res + mean(predicted_labels != test_data$Injury.Category)
+  }
+res <- res / 50
+res
+```
+
+```{r}
+library(boot)
+k <- 10
+n <- nrow(new_Data)
+
+set.seed(123)
+shuffled_indices <- sample(1:n)
+
+# Function to perform k-fold cross-validation manually
+cv_error_rates <- numeric(k)
+
+for (i in 1:k) {
+  test_indices <- ((n/k)*(i-1) + 1):((n/k)*i)
+  train_indices <- setdiff(1:n, test_indices)
+  train_data <- new_Data[shuffled_indices[train_indices], ]
+  test_data <- new_Data[shuffled_indices[test_indices], ]
+  glm.fit <- glm(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, 
+                 data = train_data, family = binomial())
+  y_pred <- predict(glm.fit, test_data, type = "response")
+  predicted_labels <- ifelse(y_pred > 0.5, 1, 0)
+  cv_error_rates[i] <- mean(predicted_labels != test_data$Injury.Category)
+}
+
+average_cv_error_rate <- mean(cv_error_rates)
+print(average_cv_error_rate)
+
+```
+
+
+
+
+```{r}
+library(caret)
+conf_matrix <- confusionMatrix(as.factor(predicted_labels), as.factor(test_data$Injury.Category))
+conf_matrix$table
+conf_matrix$overall['Accuracy']
+```
+
+
+```{r}
+library(MASS)
+n <- nrow(new_Data)
+res <- 0
+for (k in 1:10) {
+  lda.fit <- lda(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, 
+                 data = train_data)
+  y_pred <- predict(lda.fit, test_data)$class
+  res <- res + mean(y_pred != test_data$Injury.Category)
+}
+res <- res / 10
+res
+```
+
+```{r}
+pred <- predict(lda.fit, test_data)$class
+confusion_mat <- table(test_data$Injury.Category, pred, dnn = c("True", "Predicted"))
+confusion_mat 
+#Calculate the accuracy
+accuracy <- sum(diag(confusion_mat))/sum(confusion_mat)
+accuracy
+```
+
+
+```{r}
+library(MASS)
+n <- nrow(new_Data)
+res <- 0
+for (k in 1:50) {
+  qda.fit <- qda(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, data = train_data)
+  y_pred <- predict(qda.fit, test_data)$class
+  res <- res + mean(y_pred != test_data$Injury.Category)
+}
+res <- res / 50
+res
+```
+
+
+```{r}
+pred <- predict(qda.fit, test_data)$class
+confusion_mat <- table(test_data$Injury.Category, pred, dnn = c("True", "Predicted"))
+confusion_mat 
+#Calculate the accuracy
+accuracy <- sum(diag(confusion_mat))/sum(confusion_mat)
+accuracy
+```
+
+
+
+```{r}
+library(MASS)
+lda_fit <- lda(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, data = train_data)
+lda_fit
+qda_model <- qda(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, data = train_data)
+qda_model
+```
+
+```{r}
+
+```
+
+
+```{r}
+library(MASS)  # for lda
+library(caret)  # for creating folds and possibly for accuracy calculations
+
+# Assume train_data is your full dataset you want to perform CV on
+set.seed(123)  # for reproducibility
+
+# Define the number of folds
+K <- 50  # 10-fold cross-validation
+
+# Create indices for the k-folds
+folds <- createFolds(train_data$Injury.Category, k = K, list = TRUE, returnTrain = TRUE)
+
+# Initialize accumulator for average error rate
+total_error_rate <- 0
+
+# Perform K-fold cross-validation
+for (i in seq_along(folds)) {
+  # Split data into training and testing based on folds
+  train_indices <- folds[[i]]
+  test_indices <- setdiff(1:nrow(train_data), train_indices)
+  
+  train_subset <- train_data[train_indices, ]
+  test_subset <- train_data[test_indices, ]
+  
+  # Fit LDA model on the training subset
+  lda.fit <- lda(Injury.Category ~ Used.year + Driver.At.Fault + Speed.Limit, data = train_subset)
+  
+  # Predict on the testing subset
+  predictions <- predict(lda.fit, test_subset)
+  y_pred <- predictions$class
+  
+  # Calculate error rate for this fold
+  fold_error_rate <- mean(y_pred != test_subset$Injury.Category)
+  total_error_rate <- total_error_rate + fold_error_rate
+}
+
+average_error_rate <- total_error_rate / K
+average_error_rate
+```
+
+
+
+
+
+
