@@ -26,4 +26,4 @@ This project analyzes factors contributing to the severity of vehicle accidents 
 - Statistical modeling
 
 ## Author
-Ning Zhu
+Chenchen Ma, Chenyun Ni, Koroby Wang, Ning Zhu
